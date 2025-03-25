@@ -1,0 +1,53 @@
+.ace_editor {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.debug-highlight {
+  position: absolute;
+  background-color: rgba(255, 255, 0, 0.2);
+  z-index: 20;
+}
+
+.ace_gutter {
+  background-color: #f0f0f0;
+  color: #999;
+}
+
+.ace_gutter-active-line {
+  background-color: #dcdcdc;
+}
+
+.ace_active-line {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.ace_cursor {
+  border-left: 2px solid #000;
+}
+
+.ace_marker-layer .ace_selection {
+  background-color: rgba(100, 100, 200, 0.2);
+}
+
+.ace_editor.ace_autocomplete {
+  width: 300px;
+  z-index: 200;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+/* Make sure the editor is visible in the SVG context */
+foreignObject {
+  overflow: visible;
+}
+
+#root-node-editor {
+  min-height: 200px;
+  width: 100%;
+  height: 100%;
+} 

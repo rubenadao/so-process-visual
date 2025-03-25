@@ -1,0 +1,45 @@
+.node-container {
+  fill: #f9f9f9;
+  stroke: #ddd;
+  stroke-width: 1px;
+  transition: none;
+}
+
+.node:hover .node-container {
+  transform: none;
+  scale: 1;
+}
+
+.resize-handle {
+  fill: #2196F3;
+  stroke: #1976D2;
+  stroke-width: 1px;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+}
+
+.node:hover .resize-handle {
+  opacity: 0.7;
+}
+
+.resize-handle:hover {
+  opacity: 1 !important;
+  fill: #4CAF50;
+  stroke: #388E3C;
+}
+
+.resize-handle.nw {
+  cursor: nwse-resize;
+}
+
+.resize-handle.ne {
+  cursor: nesw-resize;
+}
+
+.resize-handle.sw {
+  cursor: nesw-resize;
+}
+
+.resize-handle.se {
+  cursor: nwse-resize;
+} 

@@ -1,0 +1,119 @@
+.debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+.debug-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-debug {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  background: #4a90e2;
+  color: white;
+  cursor: pointer;
+}
+
+.btn-debug:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.editor-container {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.3s;
+}
+
+.editor-container::before {
+  content: "✏️ Editable";
+  position: absolute;
+  top: 5px;
+  right: 10px;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+.editor-container:not(.debugging)::before {
+  opacity: 1;
+}
+
+.editor-container.debugging {
+  border-color: #e74c3c;
+}
+
+.editor-container:not(.debugging) {
+  border-color: #2ecc71;
+  box-shadow: 0 0 5px rgba(46, 204, 113, 0.3);
+}
+
+.io-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+  background: #fff;
+  padding: 1rem;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+}
+
+.input-area,
+.output-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.input-area label,
+.output-area label {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 0.25rem;
+  margin-left: 0;
+}
+
+.input-area textarea,
+.output-area textarea {
+  width: 100%;
+  height: 180px;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  resize: vertical;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.output-area textarea {
+  background-color: #f9f9f9;
+}
+
+.debug-highlight {
+  position: absolute;
+  background-color: rgba(255, 0, 0, 0.2);
+  z-index: 20;
+} 

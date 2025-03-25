@@ -1,0 +1,59 @@
+.floating-var-ui {
+  font-family: Arial, sans-serif;
+  user-select: none;
+}
+
+.floating-var-ui .drag-handle {
+  user-select: none;
+  cursor: move;
+}
+
+/* Override some of the default react-var-ui styles to fit our floating window */
+.floating-var-ui .react-var-ui {
+  --react-var-ui-foreground-color: #eee;
+  --react-var-ui-background-color: #1e1e2e;
+  --react-var-ui-accent-color: #8be9fd;
+  --react-var-ui-input-background-color: #2a2a3a;
+  --react-var-ui-input-background-hover-color: #353545;
+  --react-var-ui-input-background-pressed-color: #252535;
+  --react-var-ui-label-background-normal-color: #2a2a3a;
+  --react-var-ui-label-background-hover-color: #353545;
+  --react-var-ui-label-border-color: #444455;
+  
+  width: 100%;
+  border: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+}
+
+.floating-var-ui .react-var-ui input,
+.floating-var-ui .react-var-ui select {
+  color: #eee;
+}
+
+/* Make the content area scrollable */
+.floating-var-ui .react-var-ui-content {
+  max-height: calc(80vh - 40px);
+  overflow-y: auto;
+}
+
+/* Custom scrollbar */
+.floating-var-ui ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.floating-var-ui ::-webkit-scrollbar-track {
+  background: #1e1e2e;
+}
+
+.floating-var-ui ::-webkit-scrollbar-thumb {
+  background: #444455;
+  border-radius: 4px;
+}
+
+.floating-var-ui ::-webkit-scrollbar-thumb:hover {
+  background: #555566;
+} 
