@@ -10,6 +10,28 @@ let lastForkCallId = 0;
 // Track pending fork operations to be processed when a step completes
 const pendingForks = [];
 
+// Track which nodes are allowed to fork (have completed catch-up)
+const nodesAllowedToFork = new Set();
+
+// Enable forking for a specific node (call after catch-up is complete)
+export function enableForkingForNode(nodeId) {
+  console.log(`Enabling forking for node: ${nodeId}`);
+  nodesAllowedToFork.add(nodeId);
+}
+
+// Check if a node is allowed to fork
+export function canNodeFork(nodeId) {
+  // Root node can always fork
+  if (nodeId === 'root') return true;
+  // Other nodes need to be explicitly enabled
+  return nodesAllowedToFork.has(nodeId);
+}
+
+// Clear all fork permissions (call when resetting)
+export function clearForkPermissions() {
+  nodesAllowedToFork.clear();
+}
+
 // Custom event bus for inter-component communication
 export const forkEventBus = {
   listeners: {},
@@ -71,7 +93,7 @@ export const forkEventBus = {
 };
 
 const customIncludes = {
-  "process.h": {
+  "unistd.h": {
     load: function(rt) {
       // Register the fork() function
       rt.regFunc(function(rt, _this) {
@@ -83,6 +105,19 @@ const customIncludes = {
         if (currentlyProcessingFork) {
           console.warn('Already processing a fork, skipping to prevent infinite recursion');
           return rt.val(rt.intTypeLiteral, 0);
+        }
+        
+        // CRITICAL: Check if this is a child process via config flag
+        // This prevents child processes from forking during catch-up stepping
+        // But allow if the node has been explicitly enabled for forking
+        if (rt.config.isChildProcess) {
+          const nodeId = rt.config.nodeId || '';
+          // Check if this node has been enabled for forking (completed catch-up)
+          if (!canNodeFork(nodeId)) {
+            console.log('Child process during catch-up, returning 0 without forking');
+            return rt.val(rt.intTypeLiteral, 0);
+          }
+          console.log(`Node ${nodeId} is a child process but allowed to fork (completed catch-up)`);
         }
         
         // Get the node ID from the runtime config
@@ -158,6 +193,16 @@ const customIncludes = {
           currentlyProcessingFork = false;
         }
       }, "global", "fork", [], rt.intTypeLiteral);
+      
+      // Register the _exit() function - terminates process immediately
+      rt.regFunc(function(rt, _this, statusCode) {
+        const exitCode = statusCode ? statusCode.v : 0;
+        console.log(`_exit(${exitCode}) called - terminating process`);
+        rt.config.stdio.write(`Process exited with code ${exitCode}\n`);
+        // For now, behave like a return - the runtime will handle termination
+        rt.exitValue = rt.val(rt.intTypeLiteral, exitCode);
+        throw {type: 'return', value: rt.exitValue};
+      }, "global", "_exit", [rt.intTypeLiteral], rt.voidTypeLiteral);
     }
   }
 };

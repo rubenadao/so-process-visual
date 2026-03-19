@@ -339,6 +339,16 @@ export class CPPDebugger {
     this.onOutputChange('');
   }
 
+  // Enable forking for this debugger (call after child catch-up is complete)
+  enableForking(): void {
+    this.isChildProcess = false;
+    // Also update the config if the debugger is already running
+    if (this._debugger && this._debugger.rt && this._debugger.rt.config) {
+      this._debugger.rt.config.isChildProcess = false;
+      console.log(`Enabled forking for node ${this.nodeId}`);
+    }
+  }
+
   // Method to set variables in the debugger
   setVariables(variables: Array<{ name: string; type: string; value: any }>): boolean {
     if (!this.debugger || !this.debugger.scope || !this.debugger.scope[0] || !this.debugger.scope[0].variables) {

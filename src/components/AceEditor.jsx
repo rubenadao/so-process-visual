@@ -7,6 +7,8 @@ const AceEditor = ({
     theme = "monokai",
     value = "",
     markers = [],
+    highlightLine = -1,
+    highlightRange = null,  // { startLine, startCol, endLine, endCol } for precise highlighting
     fontSize = 12,
     width = "100%",
     height = "100%",
@@ -51,7 +53,7 @@ const AceEditor = ({
             updateEditorProps();
         }
     }, [
-        markers, mode, theme, fontSize, maxLines, readOnly, 
+        markers, highlightLine, highlightRange, mode, theme, fontSize, maxLines, readOnly, 
         highlightActiveLine, setShowPrintMargin, value, showGutter
     ]);
 
@@ -81,8 +83,24 @@ const AceEditor = ({
         }
         markerIds.current = [];
 
-        // Add new markers
-        if (markers && markers.length) {
+        // Add new markers - prefer highlightRange for precise highlighting
+        const Range = ace.require("ace/range").Range;
+        if (highlightRange && Range) {
+            // Use precise range highlighting (text marker, not fullLine)
+            const marker = new Range(
+                highlightRange.startLine,
+                highlightRange.startCol,
+                highlightRange.endLine,
+                highlightRange.endCol
+            );
+            const markerId = editor.getSession().addMarker(marker, "debug-highlight", "text");
+            markerIds.current.push(markerId);
+        } else if (highlightLine >= 0 && Range) {
+            // Fall back to full line highlighting
+            const marker = new Range(highlightLine, 0, highlightLine, 1);
+            const markerId = editor.getSession().addMarker(marker, "debug-highlight", "fullLine");
+            markerIds.current.push(markerId);
+        } else if (markers && markers.length) {
             for (let marker of markers) {
                 markerIds.current.push(editor.getSession().addMarker(marker, "debug-highlight", "fullLine"));
             }

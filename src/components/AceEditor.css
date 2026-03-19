@@ -4,11 +4,17 @@
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
   font-size: 14px;
   line-height: 1.5;
+  font-weight: bold;
+}
+
+.ace_editor * {
+  font-weight: bold !important;
 }
 
 .debug-highlight {
   position: absolute;
-  background-color: rgba(255, 255, 0, 0.2);
+  background-color: rgba(255, 255, 0, 0.3);
+  border-radius: 2px;
   z-index: 20;
 }
 

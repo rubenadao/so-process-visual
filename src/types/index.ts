@@ -1,3 +1,10 @@
+export interface SourceRange {
+  startLine: number;
+  startCol: number;
+  endLine: number;
+  endCol: number;
+}
+
 export interface TreeNode {
   id: string;
   name: string;
@@ -10,7 +17,11 @@ export interface TreeNode {
   children?: TreeNode[];
   debuggerInstance?: any;
   currentLine?: number;
+  currentRange?: SourceRange | null;
   isDebugging?: boolean;
+  parentNodeId?: string;  // Track parent node for wait()
+  isWaiting?: boolean;    // Process is blocked on wait()
+  isTerminated?: boolean; // Process has finished execution
 }
 
 export interface TreeVisualizerProps {
@@ -31,7 +42,11 @@ export interface TreeVisualizerProps {
   verticallyConstrained?: boolean;
   isCompactMode?: boolean;
   isHorizontalLayout?: boolean;
+  spacingMultiplier?: number;
+  editorTheme?: string;
+  showInlineVariables?: boolean;
   onNodeClick?: (node: TreeNode) => void;
+  onStepNode?: (nodeId: string) => void;
   onStatsUpdate?: (generation: number, totalNodes: number) => void;
   currentLine?: number;
   onNodeResize?: (width: number, height: number) => void;
@@ -42,9 +57,12 @@ export interface TreeNodeProps {
   boxWidth: number;
   boxHeight: number;
   onClick?: (node: TreeNode) => void;
+  onStepNode?: (nodeId: string) => void;
   isHorizontalLayout?: boolean;
   currentLine?: number;
   onResize?: (width: number, height: number) => void;
+  editorTheme?: string;
+  showInlineVariables?: boolean;
 }
 
 export interface TreeLinkProps {

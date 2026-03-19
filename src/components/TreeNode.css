@@ -42,4 +42,18 @@
 
 .resize-handle.se {
   cursor: nwse-resize;
+}
+
+/* PID badge */
+.pid-badge rect {
+  transition: fill 0.15s;
+}
+
+/* Step button */
+.step-btn rect {
+  transition: fill 0.15s;
+}
+
+.step-btn:hover rect {
+  fill: #66BB6A;
 } 

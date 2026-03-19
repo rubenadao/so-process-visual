@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "cli": "node cli/run.js",
+    "cli:debug": "node cli/run.js --debug"
   },
   "keywords": [
     "react",
@@ -22,8 +24,10 @@
     "@fortawesome/react-fontawesome": "^0.2.0",
     "@zhobo63/imgui-ts": "^0.1.46",
     "d3": "^7.8.5",
+    "JSCPP": "^2.0.9",
     "leva": "^0.10.0",
     "lodash": "^4.17.21",
+    "ohm-js": "^17.5.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-var-ui": "^1.5.2"
@@ -34,6 +38,7 @@
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12"
   }

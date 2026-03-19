@@ -4,90 +4,149 @@ import DebugPanel from './components/DebugPanel';
 import Splitter from './components/Splitter';
 import FloatingVarUI from './components/FloatingVarUI';
 import { TreeNode } from './types';
-import { CPPDebugger } from './lib/jscpp/debugger';
-import { forkEventBus } from './lib/custom_functions';
+import { CInterpDebugger, InterpreterState, ForkEvent, WaitCallback } from './lib/cinterp';
 import cloneDeep from 'lodash/cloneDeep';
+import { scenarios } from './scenarios';
 
-const initialData: TreeNode = {
-  id: 'root',
-  name: '1000',
-  description: 'Start node',
-  hasImage: true,
-  imageUrl: 'https://picsum.photos/50/50',
-  hasIcon: true,
-  customHtml: "<div class='custom-content'><button><i class='fas fa-cog'></i> Click me</button></div>",
-  code: `#include <stdio.h>
-#include <process.h>
-
-int main() {
-    // Initialize variables
-    int counter = 0;
-    printf("Parent process starting\\n");
-    
-    // Call fork to create a child process
-    int pid = fork();
-    printf("Process ID: %d\\n", pid);
-    
-    // Increment counter in both processes
-        counter++;
-    int pid = fork();
-    printf("Counter value: %d\\n", counter);
-    
-    // Each process calculates something
-    int result = pid * 10 + counter;
-    printf("Result: %d\\n", result);
-    
-    return 0;
-}`,
-  children: [
-  {
-      id: 'child-root-1001',
-      name: '1000',
-      description: 'Start node',
-      hasImage: true,
-      imageUrl: 'https://picsum.photos/50/50',
-      hasIcon: true,
-      customHtml: "<div class='custom-content'><button><i class='fas fa-cog'></i> Click me</button></div>",
-      code: `#include <stdio.h>
-#include <process.h>
-
-int main() {
-    // Initialize variables
-    int counter = 0;
-    int sum = 0;
-    int sum2 = 0;
-    int sum3 = 0;
-
-    // Without a return statement, C++ will throw an error
-    // Add proper code here
-    printf("Child node executing\\n");
-    
-    return 0; // Add proper return statement
-}`
-    }
-    ]
+// localStorage keys
+const STORAGE_KEYS = {
+  SETTINGS: 'so-process-visual-settings',
+  SCENARIO_INDEX: 'so-process-visual-scenario-index',
+  EDITOR_CODE: 'so-process-visual-editor-code'
 };
 
+// Load persisted values from localStorage
+const loadPersistedSettings = () => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.warn('Failed to load settings from localStorage:', e);
+  }
+  return null;
+};
+
+const loadPersistedScenarioIndex = () => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.SCENARIO_INDEX);
+    if (stored !== null) {
+      const index = parseInt(stored, 10);
+      if (index >= 0 && index < scenarios.length) {
+        return index;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load scenario index from localStorage:', e);
+  }
+  return 0;
+};
+
+const loadPersistedEditorCode = () => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEYS.EDITOR_CODE);
+    if (stored) {
+      return stored;
+    }
+  } catch (e) {
+    console.warn('Failed to load editor code from localStorage:', e);
+  }
+  return null;
+};
+
+const defaultCode = scenarios[0].code;
+
 const App: React.FC = () => {
-  const [data, setData] = useState<TreeNode>(initialData);
-  const [stats, setStats] = useState({ generation: 1, totalNodes: 2 });
-  const [isCompactMode, setIsCompactMode] = useState(false);
-  const [isHorizontalLayout, setIsHorizontalLayout] = useState(false);
-  const [boxDimensions, setBoxDimensions] = useState({ width: 180, height: 120 });
+  // Load persisted values
+  const persistedSettings = loadPersistedSettings();
+  const persistedScenarioIndex = loadPersistedScenarioIndex();
+  const persistedEditorCode = loadPersistedEditorCode();
+  
+  const [data, setData] = useState<TreeNode | null>(null);
+  const [selectedScenarioIndex, setSelectedScenarioIndex] = useState<number>(persistedScenarioIndex);
+  const [editorCode, setEditorCode] = useState<string>(
+    persistedEditorCode || scenarios[persistedScenarioIndex].code
+  );
+  const [stats, setStats] = useState({ steps: 0, totalNodes: 0, generation: 0 });
+  const [isCompactMode, setIsCompactMode] = useState(persistedSettings?.isCompactMode ?? false);
+  const [isHorizontalLayout, setIsHorizontalLayout] = useState(persistedSettings?.isHorizontalLayout ?? false);
+  const [spacingMultiplier, setSpacingMultiplier] = useState(persistedSettings?.spacingMultiplier ?? 1.5);
+  const [showSettings, setShowSettings] = useState(false);
+  const [editorTheme, setEditorTheme] = useState(persistedSettings?.editorTheme ?? 'chrome');
+  const [showInlineVariables, setShowInlineVariables] = useState(persistedSettings?.showInlineVariables ?? true);
+  const [boxDimensions, setBoxDimensions] = useState({ width: 300, height: 350 });
   const [isDebugging, setIsDebugging] = useState(false);
   const [currentLine, setCurrentLine] = useState<number>(-1);
-  const [sidebarWidth, setSidebarWidth] = useState(400);
-  const [showTree, setShowTree] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(persistedSettings?.sidebarWidth ?? 400);
+  const [mainEditorHeight, setMainEditorHeight] = useState(persistedSettings?.mainEditorHeight ?? 250);
+  const [showTree, setShowTree] = useState(false);
   const debuggerRef = useRef<any>(null);
   const [output, setOutput] = useState<string>('');
   const [input, setInput] = useState<string>('');
-  const processedForkCallsRef = useRef<{[key: number]: boolean}>({});
-  const nodesCreatedThisStepRef = useRef<{[key: string]: boolean}>({});
+  const pendingForkEventsRef = useRef<Array<{nodeId: string, event: ForkEvent, debugger_: CInterpDebugger}>>([]);
+  
+  // Track parent-child relationships and terminated children
+  // Maps parent's node ID to an array of terminated child PIDs with their exit status
+  const terminatedChildrenRef = useRef<Map<string, Array<{childPid: number, exitStatus: number}>>>(new Map());
+  // Maps node ID to its PID
+  const nodeIdToPidRef = useRef<Map<string, number>>(new Map());
+  // Maps PID to node ID (for finding parent node by PID)
+  const pidToNodeIdRef = useRef<Map<number, string>>(new Map());
+
+  // Persist settings to localStorage
+  useEffect(() => {
+    const settings = {
+      isCompactMode,
+      isHorizontalLayout,
+      spacingMultiplier,
+      editorTheme,
+      showInlineVariables,
+      sidebarWidth,
+      mainEditorHeight
+    };
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  }, [isCompactMode, isHorizontalLayout, spacingMultiplier, editorTheme, showInlineVariables, sidebarWidth, mainEditorHeight]);
+
+  // Persist selected scenario index
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.SCENARIO_INDEX, String(selectedScenarioIndex));
+  }, [selectedScenarioIndex]);
+
+  // Persist editor code (only if different from current scenario default)
+  useEffect(() => {
+    const scenarioDefault = scenarios[selectedScenarioIndex].code;
+    if (editorCode !== scenarioDefault) {
+      localStorage.setItem(STORAGE_KEYS.EDITOR_CODE, editorCode);
+    } else {
+      // Clear custom code if it matches the default
+      localStorage.removeItem(STORAGE_KEYS.EDITOR_CODE);
+    }
+  }, [editorCode, selectedScenarioIndex]);
 
   // Calculate available space for visualization
   const headerHeight = 0; // Removed heading and description
   const windowHeight = window.innerHeight;
   const availableHeight = windowHeight - headerHeight - 40; // 40px for margins
+
+  // Calculate appropriate node dimensions based on code content
+  const calculateDimensionsFromCode = (code: string) => {
+    const lines = code.split('\n');
+    const lineCount = lines.length;
+    const maxLineLength = Math.max(...lines.map(line => line.length));
+    
+    // Calculate width based on longest line
+    // Ace Editor uses ~8.4px per character with 14px font, plus gutter (~45px) and padding
+    const calculatedWidth = Math.max(300, maxLineLength * 8.4 + 60);
+    
+    // Calculate height based on line count
+    // Ace Editor CSS: font-size 14px, line-height 1.5 = 21px per line exactly
+    // Plus 4px for foreignObject padding (2px top + 2px bottom from TreeNode)
+    // Plus 2px for editor border (1px top + 1px bottom from AceEditor.css)
+    const calculatedHeight = lineCount * 21 + 6;
+    
+    return { width: calculatedWidth, height: calculatedHeight };
+  };
 
   const generateNodeId = () => `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -135,185 +194,145 @@ const App: React.FC = () => {
     
     console.log(`Cloning debugger state from source to new node ${newNodeId}`);
     
-    // Get the source code before anything else
-    const code = sourceDebugger.getSourceCode ? sourceDebugger.getSourceCode() : '';
+    // Get the state from the source debugger
+    const state = sourceDebugger.getState?.();
+    if (!state) {
+      console.error('Cannot clone debugger: state not available');
+      return null;
+    }
+    
+    // Get the source code
+    const code = sourceDebugger.interp?.code || '';
     if (!code) {
       console.error('Cannot clone debugger: source code not available');
       return null;
     }
     
-    // Create a new debugger instance with the correct handlers
+    // Create handlers for the new debugger
     const handleOutputChange = (newOutput: string) => {
       setOutput(prevOutput => prevOutput + newOutput);
     };
-
-    const handleLineChange = (line: number, nodeId: string) => {
-      setData(prevData => {
-        return updateNodeProperty(prevData, nodeId, 'currentLine', line);
-      });
-    };
-    
-    // Create new debugger but indicate it's a child process
-    const clonedDebugger = new CPPDebugger(
-      handleOutputChange,
-      (line: number) => handleLineChange(line, newNodeId),
-      newNodeId,
-      true // This is a child process - CRITICAL to prevent fork loops
-    );
-    
-    // Set the line change handler directly
-    clonedDebugger.lineChangeHandler = (line: number) => handleLineChange(line, newNodeId);
-    
-    // Copy input state
-    clonedDebugger.setInput(sourceDebugger.input || '');
     
     try {
-      // Get parent variables before we start the child process
-      const parentVariables = sourceDebugger.getVariables ? sourceDebugger.getVariables() : [];
+      // Create a deep clone of the state for the child
+      const childState: InterpreterState = cloneDeep(state);
       
-      // Get the current line from the parent
-      const parentLine = sourceDebugger.getCurrentLine ? 
-        sourceDebugger.getCurrentLine() : 
-        (sourceDebugger.debugger?.nextNode ? 
-          (sourceDebugger.debugger.nextNode().sLine - 1) : -1);
+      // Child process sees pid as 0
+      childState.variables.set('pid', { name: 'pid', value: 0, type: 'int' });
       
-      console.log(`Parent is at line ${parentLine}, starting child process debugging`);
+      // Use the static fromState method to create the child debugger
+      const clonedDebugger = CInterpDebugger.fromState(
+        code,
+        childState,
+        newNodeId,
+        handleOutputChange
+      );
       
-      // Use specialized cloning function if available
-      if (typeof sourceDebugger.cloneInternalState === 'function') {
-        console.log(`Using specialized cloneInternalState function for node ${newNodeId}`);
-        
-        // This function should handle all the cloning logic including variable copying
-        sourceDebugger.cloneInternalState(clonedDebugger);
-        
-        // Set pid to 0 explicitly after cloning state
-        if (clonedDebugger.setVariable) {
-          clonedDebugger.setVariable('pid', '0');
-          console.log(`Set child process pid to 0 after cloning state`);
-        }
-      } else {
-        console.log(`Using manual state cloning for node ${newNodeId}`);
-        
-        // Start debugging with the same code (synchronously if possible)
-        if (clonedDebugger.startDebugSync) {
-          console.log(`Starting child debugger synchronously with code length ${code.length}`);
-          clonedDebugger.startDebugSync(code);
-        } else {
-          console.log(`Starting child debugger asynchronously`);
-          clonedDebugger.startDebug(code);
-        }
-        
-        console.log(`Child debugger started, now at line ${clonedDebugger.getCurrentLine?.() || 'unknown'}`);
-        
-        // Need to step the debugger to reach the correct line
-        if (parentLine > 0) {
-          console.log(`Attempting to position child process at parent line ${parentLine}`);
-          
-          // Approach 1: Set current line directly if available
-          if (clonedDebugger.setCurrentLine) {
-            clonedDebugger.setCurrentLine(parentLine);
-            console.log(`Set child current line to ${parentLine} using setCurrentLine`);
-          }
-          
-          // Approach 2: Step through the program until we reach the parent's line
-          let currentChildLine = clonedDebugger.getCurrentLine?.() || 0;
-          console.log(`Child initially at line ${currentChildLine}, need to reach ${parentLine}`);
-          
-          // If the child is at an earlier line, step forward to match parent
-          let attempts = 0;
-          while (clonedDebugger.isDebugging() && currentChildLine < parentLine && attempts < 100) {
-            console.log(`Stepping child from line ${currentChildLine} toward ${parentLine}`);
-            clonedDebugger.stepNext();
-            currentChildLine = clonedDebugger.getCurrentLine?.() || 0;
-            attempts++;
-          }
-          
-          console.log(`Child positioned at line ${currentChildLine} after ${attempts} steps`);
-        }
-        
-        // Now copy all variables from parent to child
-        if (parentVariables && parentVariables.length > 0) {
-          console.log(`Copying ${parentVariables.length} variables from parent to child`);
-          
-          // Map variables to ensure pid is 0 for child process
-          const childVars = parentVariables.map(v => {
-            if (v.name === 'pid') {
-              return { ...v, value: '0' }; // Child sees pid=0
-            }
-            return { ...v };
-          });
-          
-          // Set all variables on the child
-          if (clonedDebugger.setVariables) {
-            clonedDebugger.setVariables(childVars);
-            console.log(`Variables copied to child process`);
-          }
-          
-          // Explicitly set pid variable if available
-          if (clonedDebugger.setVariable) {
-            clonedDebugger.setVariable('pid', '0');
-            console.log(`Explicitly set child pid to 0`);
-          }
-        }
-        
-        // For a child process created by fork(), advance it past the fork() call
-        // This prevents the child from executing the fork() again
-        try {
-          console.log(`Attempting to advance child past fork() line`);
-          
-          if (clonedDebugger.debugger && clonedDebugger.debugger.nextNode) {
-            const nextNode = clonedDebugger.debugger.nextNode();
-            if (nextNode && nextNode.sLine) {
-              // Get current line
-              const currentLine = nextNode.sLine - 1;
-              console.log(`Current child line: ${currentLine}`);
-              
-              // Only advance if we're at a fork line (look for "fork" in code at this line)
-              const lines = code.split('\n');
-              if (currentLine < lines.length) {
-                const currentLineCode = lines[currentLine];
-                if (currentLineCode.includes('fork(')) {
-                  console.log(`Child is at a fork line "${currentLineCode}", advancing past it`);
-                  
-                  // Step once to move past the fork
-                  clonedDebugger.stepNext();
-                  
-                  const afterPosition = clonedDebugger.getCurrentLine?.() || -1;
-                  console.log(`Child now positioned at line ${afterPosition} (after fork)`);
-                } else {
-                  console.log(`Child line doesn't appear to be a fork call: "${currentLineCode}"`);
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Error positioning child process after fork:", e);
-        }
-      }
+      console.log(`Child debugger created at line ${clonedDebugger.getCurrentLine()}`);
       
-      // Final verification: ensure child pid is 0
-      if (clonedDebugger.setVariable) {
-        clonedDebugger.setVariable('pid', '0');
-        console.log(`Final verification: Set child process pid to 0`);
-      }
+      // Set up fork handler for the child process
+      setupForkHandler(clonedDebugger, newNodeId);
       
-      // Verify pid was set correctly by checking variables
-      const childVars = clonedDebugger.getVariables?.() || [];
-      const pidVar = childVars.find((v: any) => v.name === 'pid');
-      console.log(`Child pid verification: ${pidVar ? `pid=${pidVar.value}` : 'pid not found'}`);
-      
+      return clonedDebugger;
     } catch (error) {
       console.error('Error cloning debugger state:', error);
+      return null;
+    }
+  };
+
+  // Function to set up fork event handling on a debugger
+  const setupForkHandler = (debugger_: CInterpDebugger, nodeId: string) => {
+    console.log(`Setting up fork handler for node ${nodeId}`);
+    debugger_.setOnFork((event: ForkEvent) => {
+      console.log(`Fork event fired from ${nodeId}`);
+      // Collect fork event for inline processing during step
+      pendingForkEventsRef.current.push({ nodeId, event, debugger_ });
+    });
+  };
+
+  // Function to set up wait callback on a debugger
+  // Returns the first terminated child of the given parent PID
+  const setupWaitHandler = (debugger_: CInterpDebugger, nodeId: string) => {
+    debugger_.setOnWait((parentPid: number) => {
+      // Find the node ID for this parent PID
+      const parentNodeId = pidToNodeIdRef.current.get(parentPid) || nodeId;
+      const terminatedChildren = terminatedChildrenRef.current.get(parentNodeId);
+      
+      console.log(`wait() called by PID ${parentPid} (nodeId: ${parentNodeId}), terminated children:`, terminatedChildren);
+      
+      if (terminatedChildren && terminatedChildren.length > 0) {
+        // Return and remove the first terminated child
+        const child = terminatedChildren.shift()!;
+        console.log(`wait() returning terminated child PID ${child.childPid} with exit status ${child.exitStatus}`);
+        return child;
+      }
+      
+      console.log(`wait() blocking - no terminated children yet`);
+      return null;
+    });
+  };
+
+  // Function to create a child node from a fork event (called inline during stepping)
+  const createChildFromForkEvent = (
+    parentNode: TreeNode, 
+    event: ForkEvent, 
+    debugger_: CInterpDebugger
+  ): TreeNode | null => {
+    const childState = event.childState;
+    if (!childState) {
+      console.error('Fork event missing child state');
+      return null;
     }
     
-    return clonedDebugger;
+    const newNodeId = generateNodeId();
+    const code = debugger_.interp?.code || parentNode.code || '';
+    
+    const handleOutputChange = (newOutput: string) => {
+      setOutput(prevOutput => prevOutput + newOutput);
+    };
+    
+    console.log(`Child state before creation: pc=${childState.pc}, finished=${childState.finished}`);
+    
+    const childDebugger = CInterpDebugger.fromState(
+      code,
+      childState,
+      newNodeId,
+      handleOutputChange
+    );
+    
+    setupForkHandler(childDebugger, newNodeId);
+    setupWaitHandler(childDebugger, newNodeId);
+    
+    // Track child PID and parent relationship
+    nodeIdToPidRef.current.set(newNodeId, event.childPid);
+    pidToNodeIdRef.current.set(event.childPid, newNodeId);
+    
+    // Verify fork handler is set
+    const interpHasForkHandler = !!(childDebugger.interp as any)?.onFork;
+    console.log(`Created child ${newNodeId}: pc=${childDebugger.interp?.getState()?.pc}, interp.onFork set: ${interpHasForkHandler}`);
+    
+    return {
+      id: newNodeId,
+      name: `${event.childPid}`,
+      description: `Child process ${event.childPid}`,
+      code: code,
+      debuggerInstance: childDebugger,
+      isDebugging: true,
+      currentLine: childDebugger.getCurrentLine(),
+      currentRange: childDebugger.getCurrentRange(),
+      children: [],
+      parentNodeId: parentNode.id,  // Track parent for wait()
+    };
   };
 
   const addChildToRoot = () => {
-    setData(prevData => ({
-      ...prevData,
-      children: [...(prevData.children || []), createNewNode(prevData)]
-    }));
+    setData(prevData => {
+      if (!prevData) return null;
+      return {
+        ...prevData,
+        children: [...(prevData.children || []), createNewNode(prevData)]
+      };
+    });
   };
 
   const addChildToAllNodes = () => {
@@ -325,10 +344,12 @@ const App: React.FC = () => {
       ]
     });
 
-    setData(addChildrenRecursively);
+    setData(prevData => prevData ? addChildrenRecursively(prevData) : null);
   };
 
   const addRandomChild = () => {
+    if (!data) return;
+    
     const findRandomNode = (node: TreeNode, nodes: TreeNode[]): void => {
       nodes.push(node);
       if (node.children) {
@@ -354,11 +375,11 @@ const App: React.FC = () => {
       };
     };
 
-    setData(prevData => addChildToNode(prevData, randomNode.id));
+    setData(prevData => prevData ? addChildToNode(prevData, randomNode.id) : null);
   };
 
-  const updateStats = useCallback((generation: number, totalNodes: number) => {
-    setStats({ generation, totalNodes });
+  const updateStats = useCallback((_generation: number, totalNodes: number) => {
+    setStats(prev => ({ ...prev, totalNodes }));
   }, []);
 
   const toggleCompactMode = () => {
@@ -383,26 +404,15 @@ const App: React.FC = () => {
       setOutput(prevOutput => prevOutput + newOutput);
     };
 
-    const handleLineChange = (line: number, nodeId: string) => {
-      // Update the specific node's current line
-      setData(prevData => {
-        return updateNodeProperty(prevData, nodeId, 'currentLine', line);
-      });
-    };
-
-    // CRITICAL: Create the debugger instance with the node ID
-    // This ensures the JSCPP runtime knows which node it belongs to
-    const debuggerInstance = new CPPDebugger(
+    // Create the debugger instance using the new CInterp adapter
+    // Line state is managed internally by each runtime - read via getCurrentLine()
+    const debuggerInstance = new CInterpDebugger(
       handleOutputChange,
-      (line: number) => handleLineChange(line, nodeId),
-      nodeId, // Pass the node ID to the debugger instance
-      isChildProcess // Pass whether this is a child process
+      nodeId,
+      isChildProcess
     );
     
     console.log(`Created debugger with nodeId=${nodeId}`);
-    
-    // Make sure we can access the line change handler directly
-    debuggerInstance.lineChangeHandler = (line: number) => handleLineChange(line, nodeId);
     
     // Set input
     debuggerInstance.setInput(input);
@@ -429,40 +439,34 @@ const App: React.FC = () => {
 
   // Function to initialize debuggers for all nodes
   const initializeAllDebuggers = async () => {
-    // Reset all nodes first
+    // Reset PID tracking maps
+    terminatedChildrenRef.current.clear();
+    nodeIdToPidRef.current.clear();
+    pidToNodeIdRef.current.clear();
+    
+    // Create and start debuggers in a single operation
     setData(prevData => {
-      const resetDebugging = (node: TreeNode): TreeNode => ({
-        ...node,
-        debuggerInstance: undefined,
-        currentLine: -1,
-        isDebugging: false,
-        children: node.children ? node.children.map(resetDebugging) : undefined
-      });
-      return resetDebugging(prevData);
-    });
-
-    // Now create new debuggers for each node
-    setData(prevData => {
+      if (!prevData) return null;
+      
       const initNode = (node: TreeNode): TreeNode => {
+        // Create debugger for this node
         const debuggerInstance = createNodeDebugger(node.id, node.code || '', false);
         
-        return {
-          ...node,
-          debuggerInstance,
-          isDebugging: true,
-          currentLine: -1,
-          children: node.children ? node.children.map(initNode) : undefined
-        };
-      };
-      return initNode(prevData);
-    });
-
-    // Start all debuggers
-    setData(prevData => {
-      const startDebugging = async (node: TreeNode): Promise<TreeNode> => {
-        if (node.debuggerInstance && node.code) {
+        // Set up fork handler for this node
+        setupForkHandler(debuggerInstance, node.id);
+        setupWaitHandler(debuggerInstance, node.id);
+        
+        // Start debugging immediately
+        if (node.code) {
           try {
-            await node.debuggerInstance.startDebug(node.code);
+            debuggerInstance.startDebugSync(node.code);
+            
+            // Track root process PID (1000)
+            if (node.id === 'root') {
+              const rootPid = 1000;  // Root always has PID 1000
+              nodeIdToPidRef.current.set(node.id, rootPid);
+              pidToNodeIdRef.current.set(rootPid, node.id);
+            }
           } catch (error) {
             console.error(`Failed to start debugging for node ${node.id}:`, error);
           }
@@ -470,119 +474,225 @@ const App: React.FC = () => {
         
         return {
           ...node,
-          children: node.children 
-            ? await Promise.all(node.children.map(startDebugging)) 
-            : undefined
+          debuggerInstance,
+          isDebugging: true,
+          currentLine: debuggerInstance.getCurrentLine(),
+          currentRange: debuggerInstance.getCurrentRange(),
+          children: node.children ? node.children.map(initNode) : undefined
         };
       };
       
-      // Start with a copy then await all the async operations
-      const nodeCopy = { ...prevData };
-      startDebugging(nodeCopy).then(); // Fire and forget
-      return nodeCopy;
+      return initNode(prevData);
     });
   };
 
   // Function to step all debuggers
   const stepAllDebuggers = () => {
-    // Reset processed fork calls when stepping
-    // This ensures we can process fork calls again on each step
-    processedForkCallsRef.current = {};
+    // Clear pending fork events
+    pendingForkEventsRef.current = [];
     
-    // Clear the list of nodes created this step
-    const nodesCreatedThisStep = Object.keys(nodesCreatedThisStepRef.current);
-    if (nodesCreatedThisStep.length > 0) {
-      console.log(`Not stepping ${nodesCreatedThisStep.length} nodes created in previous step:`, nodesCreatedThisStep);
-    }
-    nodesCreatedThisStepRef.current = {};
-    
-    console.log('Stepping all debuggers...');
-    
-    // First step all debuggers
+    // Step all debuggers and process fork events in a single state update
     setData(prevData => {
+      if (!prevData) return null;
+      
       const stepNode = (node: TreeNode): TreeNode => {
-        // Skip nodes that were created in the previous step
-        // This prevents child nodes from executing on the same step they were created
-        if (nodesCreatedThisStep.indexOf(node.id) >= 0) {
-          console.log(`Skipping step for newly created node ${node.id}`);
-          return node;
-        }
+        console.log(`stepNode: ${node.id}, children: ${node.children?.length || 0}, isDebugging: ${node.isDebugging}`);
+        // First, recursively step children
+        const steppedChildren = node.children ? node.children.map(stepNode) : [];
         
         if (node.debuggerInstance && node.isDebugging) {
           try {
-            console.log(`Stepping debugger for node ${node.id}`);
+            const interpState = node.debuggerInstance.interp?.getState();
+            console.log(`Stepping ${node.id}: pc=${interpState?.pc}, finished=${interpState?.finished}, hasForkHandler=${!!(node.debuggerInstance.interp as any)?.onFork}`);
             
-            // Step the debugger
+            // Check if debugger is still actively debugging
+            if (!node.debuggerInstance.isDebugging()) {
+              console.log(`Node ${node.id} has finished debugging`);
+              return {
+                ...node,
+                isDebugging: false,
+                isTerminated: true,
+                currentLine: -1,
+                children: steppedChildren
+              };
+            }
+            
+            // Clear pending events before stepping this node
+            const beforeStepEventCount = pendingForkEventsRef.current.length;
+            
+            // Step the debugger - this may trigger fork events
             node.debuggerInstance.stepNext();
+            
+            const afterStepState = node.debuggerInstance.interp?.getState();
+            console.log(`After step ${node.id}: pc=${afterStepState?.pc}, finished=${afterStepState?.finished}`);
+            
+            // Check for fork events from this node
+            const newEvents = pendingForkEventsRef.current.slice(beforeStepEventCount);
+            const thisNodeEvents = newEvents.filter(e => e.nodeId === node.id);
+            
+            console.log(`Node ${node.id}: ${newEvents.length} new events, ${thisNodeEvents.length} for this node`);
+            if (newEvents.length > 0 && thisNodeEvents.length === 0) {
+              console.log(`  Event nodeIds: ${newEvents.map(e => e.nodeId).join(', ')}`);
+            }
             
             // If debugging has finished for this node
             if (!node.debuggerInstance.isDebugging()) {
               console.log(`Debugging finished for node ${node.id}`);
+              
+              // Register this process as terminated so its parent can wait() for it
+              const childPid = nodeIdToPidRef.current.get(node.id);
+              const parentNodeId = node.parentNodeId;
+              if (childPid && parentNodeId) {
+                const exitStatus = node.debuggerInstance.interp?.getState()?.exitCode ?? 0;
+                // Add to parent's terminated children list
+                if (!terminatedChildrenRef.current.has(parentNodeId)) {
+                  terminatedChildrenRef.current.set(parentNodeId, []);
+                }
+                terminatedChildrenRef.current.get(parentNodeId)!.push({
+                  childPid,
+                  exitStatus
+                });
+                console.log(`Child PID ${childPid} terminated with exit status ${exitStatus}, parent node: ${parentNodeId}`);
+              }
+              
               return {
                 ...node,
                 isDebugging: false,
+                isTerminated: true,
                 currentLine: -1,
-                children: node.children ? node.children.map(stepNode) : []
+                currentRange: null,
+                children: steppedChildren
               };
             }
             
-            // Ensure the currentLine property is updated from the debugger
-            const nextNode = node.debuggerInstance.debugger?.nextNode?.();
-            const currentLine = nextNode ? nextNode.sLine - 1 : -1;
+            // Get current line and range AFTER stepping
+            const currentLine = node.debuggerInstance.getCurrentLine ? 
+              node.debuggerInstance.getCurrentLine() : -1;
+            const currentRange = node.debuggerInstance.getCurrentRange ? 
+              node.debuggerInstance.getCurrentRange() : null;
             
-            // Get variables to ensure they're updated in the UI
-            if (node.debuggerInstance.getVariables) {
-              const variables = node.debuggerInstance.getVariables();
-              console.log(`Node ${node.id} variables:`, variables);
+            console.log(`Node ${node.id} stepped to line ${currentLine}`);
+            
+            // Process any fork events from this node - create children inline
+            let newChildren = [...steppedChildren];
+            for (const { event, debugger_ } of thisNodeEvents) {
+              const childNode = createChildFromForkEvent(node, event, debugger_);
+              if (childNode) {
+                newChildren.push(childNode);
+                console.log(`Added child ${childNode.id} to ${node.id}`);
+              }
+            }
+            
+            // Check if process is blocked on wait()
+            const isWaiting = node.debuggerInstance.interp?.getState()?.waiting ?? false;
+            if (isWaiting) {
+              console.log(`Node ${node.id} is BLOCKED on wait()`);
             }
             
             return {
               ...node,
               currentLine: currentLine,
-              children: node.children ? node.children.map(stepNode) : []
+              currentRange: currentRange,
+              isWaiting: isWaiting,
+              children: newChildren
             };
           } catch (error) {
             console.error(`Failed to step debugger for node ${node.id}:`, error);
             return {
               ...node,
               isDebugging: false,
+              isTerminated: true,
               currentLine: -1,
-              children: node.children ? node.children.map(stepNode) : []
+              currentRange: null,
+              children: steppedChildren
             };
           }
         }
         
         return {
           ...node,
-          children: node.children ? node.children.map(stepNode) : []
+          children: steppedChildren
         };
       };
       
-      // Step the entire tree
-      return stepNode(prevData);
+      const result = stepNode(prevData);
+      console.log(`Step complete. Root children: ${result.children?.length || 0}`);
+      return result;
     });
-    
-    // Now process any pending fork events - CRITICAL: this must happen
-    // after all nodes have been stepped forward to the next instruction
-    console.log("Step complete, now processing any pending fork events...");
-    
-    // Process pending forks AFTER stepping - this ensures the parent process
-    // has moved past the fork() call before the child is created
-    setTimeout(() => {
-      // Explicitly call processPendingForks to handle any queued fork operations
-      forkEventBus.processPendingForks();
-      
-      // Force a refresh of the UI after processing forks to ensure new nodes are visible
-      setData(prevData => {
-        console.log("Refreshing tree state after processing forks");
-        return { ...prevData };
-      });
-    }, 0);  // Use a short timeout to ensure this runs after the step is complete
+  };
+
+  // Function to step a single node by its ID
+  const stepSingleNode = (nodeId: string) => {
+    pendingForkEventsRef.current = [];
+
+    setData(prevData => {
+      if (!prevData) return null;
+
+      const stepTargetNode = (node: TreeNode): TreeNode => {
+        // Recurse into children first
+        const steppedChildren = node.children ? node.children.map(stepTargetNode) : [];
+
+        // Only step the matching node
+        if (node.id !== nodeId || !node.debuggerInstance || !node.isDebugging) {
+          return { ...node, children: steppedChildren };
+        }
+
+        try {
+          if (!node.debuggerInstance.isDebugging()) {
+            return { ...node, isDebugging: false, isTerminated: true, currentLine: -1, currentRange: null, children: steppedChildren };
+          }
+
+          const beforeStepEventCount = pendingForkEventsRef.current.length;
+          node.debuggerInstance.stepNext();
+
+          if (!node.debuggerInstance.isDebugging()) {
+            // Register this process as terminated so its parent can wait() for it
+            const childPid = nodeIdToPidRef.current.get(node.id);
+            const parentNodeId = node.parentNodeId;
+            if (childPid && parentNodeId) {
+              const exitStatus = node.debuggerInstance.interp?.getState()?.exitCode ?? 0;
+              if (!terminatedChildrenRef.current.has(parentNodeId)) {
+                terminatedChildrenRef.current.set(parentNodeId, []);
+              }
+              terminatedChildrenRef.current.get(parentNodeId)!.push({
+                childPid,
+                exitStatus
+              });
+              console.log(`[stepSingleNode] Child PID ${childPid} terminated with exit status ${exitStatus}, parent node: ${parentNodeId}`);
+            }
+            return { ...node, isDebugging: false, isTerminated: true, currentLine: -1, currentRange: null, children: steppedChildren };
+          }
+
+          const currentLine = node.debuggerInstance.getCurrentLine ? node.debuggerInstance.getCurrentLine() : -1;
+          const currentRange = node.debuggerInstance.getCurrentRange ? node.debuggerInstance.getCurrentRange() : null;
+          const isWaiting = node.debuggerInstance.interp?.getState()?.waiting ?? false;
+
+          // Process fork events
+          const newEvents = pendingForkEventsRef.current.slice(beforeStepEventCount);
+          const thisNodeEvents = newEvents.filter(e => e.nodeId === node.id);
+          let newChildren = [...steppedChildren];
+          for (const { event, debugger_ } of thisNodeEvents) {
+            const childNode = createChildFromForkEvent(node, event, debugger_);
+            if (childNode) newChildren.push(childNode);
+          }
+
+          return { ...node, currentLine, currentRange, isWaiting, children: newChildren };
+        } catch (error) {
+          console.error(`Failed to step node ${node.id}:`, error);
+          return { ...node, isDebugging: false, isTerminated: true, currentLine: -1, currentRange: null, children: steppedChildren };
+        }
+      };
+
+      return stepTargetNode(prevData);
+    });
+
+    setStats(prev => ({ ...prev, steps: prev.steps + 1 }));
   };
 
   // Function to stop all debuggers
   const stopAllDebuggers = () => {
     setData(prevData => {
+      if (!prevData) return null;
       const stopNode = (node: TreeNode): TreeNode => {
         if (node.debuggerInstance) {
           node.debuggerInstance.stop();
@@ -593,6 +703,7 @@ const App: React.FC = () => {
           debuggerInstance: undefined,
           isDebugging: false,
           currentLine: -1,
+          currentRange: null,
           children: node.children ? node.children.map(stopNode) : undefined
         };
       };
@@ -605,19 +716,29 @@ const App: React.FC = () => {
   };
 
   const handleRunProgram = () => {
-    // Reset the processed fork calls
-    processedForkCallsRef.current = {};
-    
     console.log('Starting program and initializing debuggers...');
     setIsDebugging(true);
+    setStats(prev => ({ ...prev, steps: 0 }));  // Reset steps on new run
     
-    // Reset any pending fork operations
-    if (typeof forkEventBus.clearPendingForks === 'function') {
-      forkEventBus.clearPendingForks(); // Clear any queued forks from previous runs
-    }
-    
-    initializeAllDebuggers();
+    // Create the initial root node from the editor code
+    const rootNode: TreeNode = {
+      id: 'root',
+      name: '1000',
+      description: 'Root process',
+      code: editorCode,
+      children: []
+    };
+    setData(rootNode);
     setShowTree(true);
+    
+    // Calculate and set appropriate node dimensions based on the code
+    const dimensions = calculateDimensionsFromCode(editorCode);
+    setBoxDimensions(dimensions);
+    
+    // Initialize debuggers after setting the data (use setTimeout to ensure state is updated)
+    setTimeout(() => {
+      initializeAllDebuggers();
+    }, 0);
   };
 
   const handleStopProgram = () => {
@@ -633,19 +754,22 @@ const App: React.FC = () => {
     console.log('Stepping all debuggers...');
     stepAllDebuggers();
     
+    // Increment step counter
+    setStats(prev => ({ ...prev, steps: prev.steps + 1 }));
+    
     // Force refresh the variables UI using multiple stages
     // This ensures that variables are properly updated across the tree
     
     // First refresh - immediately after stepping
-    setData(prevData => ({ ...prevData }));
+    setData(prevData => prevData ? { ...prevData } : null);
     
     // Second refresh - after a delay to allow JSCPP runtime to update
     setTimeout(() => {
-      setData(prevData => ({ ...prevData }));
+      setData(prevData => prevData ? { ...prevData } : null);
       
       // Third refresh - after another delay to capture any late updates
       setTimeout(() => {
-        setData(prevData => ({ ...prevData }));
+        setData(prevData => prevData ? { ...prevData } : null);
       }, 100);
     }, 50);
   };
@@ -655,6 +779,7 @@ const App: React.FC = () => {
     
     // Update input for all active debuggers
     setData(prevData => {
+      if (!prevData) return null;
       const updateInput = (node: TreeNode): TreeNode => {
         if (node.debuggerInstance) {
           node.debuggerInstance.setInput(e.target.value);
@@ -671,10 +796,11 @@ const App: React.FC = () => {
   };
 
   const handleResetTree = () => {
-    setData(initialData);
+    setData(null);
     setShowTree(false);
     setIsDebugging(false);
     setCurrentLine(-1);
+    setStats({ steps: 0, totalNodes: 0 });
     nextNodeNumber = 1001;
   };
 
@@ -683,11 +809,15 @@ const App: React.FC = () => {
   }, []);
 
   const handleCodeChange = useCallback((newCode: string) => {
-    setData(prevData => ({
-      ...prevData,
-      code: newCode
-    }));
-  }, []);
+    setEditorCode(newCode);
+    // Also update root node code if debugging is active
+    if (data) {
+      setData(prevData => prevData ? {
+        ...prevData,
+        code: newCode
+      } : null);
+    }
+  }, [data]);
 
   // Store a reference to the debugger instance when it's created
   const handleDebuggerCreated = (debuggerInstance: any) => {
@@ -696,123 +826,6 @@ const App: React.FC = () => {
 
   // Calculate canvas width based on window width minus sidebar width
   const canvasWidth = window.innerWidth - sidebarWidth - 6; // 6px for splitter width
-
-  // Fork handling: Listen for fork events from the custom functions
-  useEffect(() => {
-    console.log("Setting up fork event listener");
-    
-    // Register the event listener
-    forkEventBus.on('fork', handleForkEvent);
-    console.log("Fork event listener registered");
-    
-    // Cleanup function to remove the listener
-    return () => {
-      // Remove the event listener if possible
-      if (typeof forkEventBus.off === 'function') {
-        forkEventBus.off('fork', handleForkEvent);
-        console.log("Fork event listener removed");
-      }
-    };
-  }, []);
-
-  const handleForkEvent = (forkEvent: { 
-    nodeId: string; 
-    forkCallId: number;
-    childPid?: number;    // Child's process ID (positive)
-    parentPid?: number;   // Parent's process ID (usually 0 for child)
-  }) => {
-    console.log('Fork event received:', forkEvent);
-    
-    // Detailed debug information about the fork event
-    console.log(`Fork #${forkEvent.forkCallId} from nodeId=${forkEvent.nodeId}, childPid=${forkEvent.childPid}`);
-    
-    // Only handle each fork call once
-    if (processedForkCallsRef.current[forkEvent.forkCallId]) {
-      console.log(`Fork call ${forkEvent.forkCallId} already processed, skipping`);
-      return;
-    }
-    
-    // Mark this fork call as processed
-    processedForkCallsRef.current[forkEvent.forkCallId] = true;
-    console.log(`Marked fork call ${forkEvent.forkCallId} as processed`);
-    
-    setTimeout(() => {
-      console.log(`Processing fork event with ID ${forkEvent.forkCallId} for node ${forkEvent.nodeId}`);
-      
-      // Find the parent node by ID and update tree
-      setData(prevData => {
-        // Print the current tree state for debugging
-        console.log(`Current tree has ${getNodeCount(prevData)} nodes before fork`);
-        
-        // We'll track the ID of any newly created node
-        let newNodeId: string | null = null;
-        
-        // Function to recursively search for the parent node and add a child
-        const updateTreeWithFork = (node: TreeNode): TreeNode => {
-          // EXACT node ID match - only add child to the specific node that called fork
-          if (node.id === forkEvent.nodeId) {
-            // Found the parent node that called fork()
-            console.log(`Found parent node ${node.id} at line ${node.currentLine}`);
-            
-            // ADDITIONAL CHECK: Verify this node is actually capable of forking
-            // First make sure it has a debugger instance and is debugging
-            if (!node.debuggerInstance || !node.isDebugging) {
-              console.log(`Node ${node.id} is not in debugging state, cannot fork`);
-              return node; // Return node unchanged
-            }
-            
-            // Create a proper deep clone of the parent node
-            const childNode = createNewNode(node);
-            
-            console.log(`Created child node ${childNode.id} from parent ${node.id}`);
-            
-            // Store the new node ID to track it as created this step
-            newNodeId = childNode.id;
-            
-            // Make sure child debugger has pid set to 0 if it exists
-            if (childNode.debuggerInstance && childNode.debuggerInstance.setVariable) {
-              childNode.debuggerInstance.setVariable('pid', '0');
-              console.log(`Set child node ${childNode.id} pid to 0`);
-            }
-            
-            // Return parent node with the new child added
-            return {
-              ...node,
-              children: [...(node.children || []), childNode]
-            };
-          }
-          
-          // Not the target node, check children recursively
-          if (node.children && node.children.length > 0) {
-            const newChildren = node.children.map(updateTreeWithFork);
-            // Check if any children were modified
-            const hasChanges = newChildren.some((newChild, i) => newChild !== node.children[i]);
-            if (hasChanges) {
-              return {
-                ...node,
-                children: newChildren
-              };
-            }
-          }
-          
-          // Not a match and no children were changed, return unchanged
-          return node;
-        };
-        
-        // Apply the update function to the entire tree
-        const updatedData = updateTreeWithFork(prevData);
-        
-        // If a new node was created, track it to prevent stepping it right away
-        if (newNodeId) {
-          nodesCreatedThisStepRef.current[newNodeId] = true;
-          console.log(`Marked node ${newNodeId} as created this step - will skip stepping until next cycle`);
-        }
-        
-        console.log(`Tree update complete, now has ${getNodeCount(updatedData)} nodes`);
-        return updatedData;
-      });
-    }, 0); // Use setTimeout to ensure this runs after the current execution
-  };
 
   // Helper function to count nodes in the tree
   const getNodeCount = (node: TreeNode): number => {
@@ -829,33 +842,32 @@ const App: React.FC = () => {
       <div className="container">
         <div className="sidebar" style={{ width: `${sidebarWidth}px` }}>
           <div className="control-group">
-            <button 
-              className="btn-primary" 
-              onClick={addChildToRoot}
-              disabled={!showTree}
+            <label className="select-label">Saved Programs</label>
+            <select 
+              className="program-select"
+              value={selectedScenarioIndex}
+              onChange={(e) => {
+                const newIndex = parseInt(e.target.value, 10);
+                setSelectedScenarioIndex(newIndex);
+                // Reset to scenario default code, clearing any custom edits
+                setEditorCode(scenarios[newIndex].code);
+                localStorage.removeItem(STORAGE_KEYS.EDITOR_CODE);
+                // Reset execution when loading a new program
+                if (isDebugging) {
+                  handleStopProgram();
+                }
+                setData(null);
+                setShowTree(false);
+                setOutput('');
+                setStats({ generation: 0, totalNodes: 0, steps: 0 });
+              }}
             >
-              Add Child to Root
-            </button>
-            <button 
-              className="btn-action" 
-              onClick={addChildToAllNodes}
-              disabled={!showTree}
-            >
-              Add Child To All Nodes
-            </button>
-            <button 
-              className="btn-random" 
-              onClick={addRandomChild}
-              disabled={!showTree}
-            >
-              Add Random Child
-            </button>
-            <button
-              className="btn-reset"
-              onClick={handleResetTree}
-            >
-              Reset Tree
-            </button>
+              {scenarios.map((program, index) => (
+                <option key={index} value={index}>
+                  {program.name}
+                </option>
+              ))}
+            </select>
           </div>
           
           <div className="control-group">
@@ -871,37 +883,80 @@ const App: React.FC = () => {
             >
               Horizontal Layout
             </button>
+            <button
+              className="btn-toggle btn-settings"
+              onClick={() => setShowSettings(!showSettings)}
+              style={{ marginLeft: 'auto' }}
+              title="Settings"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
           </div>
 
-          <div className="control-group">
-            <div className="control-item">
-              <label>Node Width:</label>
-              <input
-                type="range"
-                min="100"
-                max="500"
-                value={boxDimensions.width}
-                onChange={(e) => setBoxDimensions(prev => ({ ...prev, width: parseInt(e.target.value) }))}
-                className="dimension-slider"
-              />
-              <span>{boxDimensions.width}px</span>
+          {showSettings && (
+            <div className="settings-panel">
+              <div className="settings-header">
+                <span className="settings-title">Settings</span>
+                <button
+                  className="btn-reset"
+                  onClick={() => {
+                    setSpacingMultiplier(1.5);
+                    setEditorTheme('chrome');
+                    setShowInlineVariables(true);
+                  }}
+                  title="Reset settings to defaults"
+                >
+                  Reset Defaults
+                </button>
+              </div>
+              <div className="control-group" style={{ opacity: isCompactMode ? 0.5 : 1, flexDirection: 'column', alignItems: 'stretch', marginBottom: 0 }}>
+                <label className="select-label" style={{ marginBottom: '4px', fontSize: '12px' }}>Connection Length: {spacingMultiplier.toFixed(1)}x</label>
+                <input
+                  type="range"
+                  min="1.0"
+                  max="3.0"
+                  step="0.1"
+                  value={spacingMultiplier}
+                  onChange={(e) => setSpacingMultiplier(parseFloat(e.target.value))}
+                  disabled={isCompactMode}
+                  style={{ width: '100%', cursor: isCompactMode ? 'not-allowed' : 'pointer' }}
+                />
+              </div>
+              <div className="control-group" style={{ flexDirection: 'column', alignItems: 'stretch', marginTop: '8px' }}>
+                <label className="select-label" style={{ marginBottom: '4px', fontSize: '12px' }}>Editor Theme</label>
+                <select
+                  value={editorTheme}
+                  onChange={(e) => setEditorTheme(e.target.value)}
+                  style={{ width: '100%', padding: '4px 8px', borderRadius: '4px', border: '1px solid #ccc', background: '#fff', color: '#333' }}
+                >
+                  <option value="monokai">Monokai (Dark)</option>
+                  <option value="github">GitHub (Light)</option>
+                  <option value="chrome">Chrome (Light)</option>
+                  <option value="tomorrow">Tomorrow (Light)</option>
+                  <option value="twilight">Twilight (Dark)</option>
+                  <option value="ambiance">Ambiance (Dark)</option>
+                </select>
+              </div>
+              <div className="control-group" style={{ flexDirection: 'row', alignItems: 'center', marginTop: '8px', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="inline-vars-toggle"
+                  checked={showInlineVariables}
+                  onChange={(e) => setShowInlineVariables(e.target.checked)}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="inline-vars-toggle" className="select-label" style={{ fontSize: '12px', cursor: 'pointer', margin: 0 }}>
+                  Show variables per node
+                </label>
+              </div>
             </div>
-            <div className="control-item">
-              <label>Height:</label>
-              <input
-                type="range"
-                min="80"
-                max="500"
-                value={boxDimensions.height}
-                onChange={(e) => setBoxDimensions(prev => ({ ...prev, height: parseInt(e.target.value) }))}
-                className="dimension-slider"
-              />
-              <span>{boxDimensions.height}px</span>
-            </div>
-          </div>
+          )}
 
           <DebugPanel
-            code={data.code || ''}
+            code={editorCode}
             onRun={handleRunProgram}
             onStop={handleStopProgram}
             onStepNext={handleStepNext}
@@ -912,15 +967,18 @@ const App: React.FC = () => {
             output={output}
             input={input}
             onInputChange={handleInputChange}
+            editorTheme={editorTheme}
+            initialEditorHeight={mainEditorHeight}
+            onEditorHeightChange={setMainEditorHeight}
           />
 
           <div className="stats">
             <div className="stat-item">
-              <div className="stat-label">Generation</div>
-              <div className="stat-value">{stats.generation}</div>
+              <div className="stat-label">Steps</div>
+              <div className="stat-value">{stats.steps}</div>
             </div>
             <div className="stat-item">
-              <div className="stat-label">Total Nodes</div>
+              <div className="stat-label">Total Processes</div>
               <div className="stat-value">{stats.totalNodes}</div>
             </div>
           </div>
@@ -937,7 +995,7 @@ const App: React.FC = () => {
           margin: 0,
           padding: 0
         }}>
-          {showTree ? (
+          {showTree && data ? (
             <TreeVisualizer
               data={data}
               width={canvasWidth}
@@ -955,10 +1013,14 @@ const App: React.FC = () => {
               verticallyConstrained={true}
               isCompactMode={isCompactMode}
               isHorizontalLayout={isHorizontalLayout}
+              spacingMultiplier={spacingMultiplier}
+              editorTheme={editorTheme}
+              showInlineVariables={showInlineVariables}
               onStatsUpdate={updateStats}
               currentLine={currentLine}
               onNodeResize={handleNodeResize}
               onNodeClick={handleNodeClick}
+              onStepNode={stepSingleNode}
             />
           ) : (
             <div className="empty-canvas-message" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -967,8 +1029,10 @@ const App: React.FC = () => {
           )}
         </div>
         
-        {/* Floating Variables UI */}
-        <FloatingVarUI isDebugging={isDebugging} debuggerRef={debuggerRef} data={data} />
+        {/* Floating Variables UI - only show when not using inline variables */}
+        {!showInlineVariables && (
+          <FloatingVarUI isDebugging={isDebugging} debuggerRef={debuggerRef} data={data} editorTheme={editorTheme} />
+        )}
       </div>
     </div>
   );

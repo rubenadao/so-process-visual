@@ -1,0 +1,122 @@
+// Ohm grammar for a subset of C focused on process visualization
+// Supports: variables, fork(), printf(), if/else, while, basic expressions
+
+CSubset {
+  Program = PreprocessorDirective* FunctionDef+
+
+  // Preprocessor (ignored but parsed)
+  PreprocessorDirective = "#" "include" "<" headerName ">"
+                        | "#" "include" "\"" headerName "\""
+                        | "#" "define" ident (~newline any)*
+  headerName = (~">" ~"\"" any)+
+  newline = "\n" | "\r\n" | "\r"
+
+  // Function definition
+  FunctionDef = Type ident "(" ParamList? ")" Block
+
+  ParamList = Param ("," Param)*
+  Param = Type ident
+
+  // Types
+  Type = "int" | "char" | "void" | "pid_t"
+
+  // Statements
+  Block = "{" Statement* "}"
+
+  Statement = VarDecl
+            | Assignment ";"
+            | ForkCall ";"
+            | PrintfCall ";"
+            | IfStatement
+            | WhileStatement
+            | ForStatement
+            | ReturnStatement
+            | ExprStatement
+            | Block
+
+  VarDecl = Type ident ("=" Expr)? ";"
+
+  Assignment = ident "=" Expr
+
+  ForkCall = "fork" "(" ")"
+
+  PrintfCall = "printf" "(" stringLiteral ("," Expr)* ")"
+
+  IfStatement = "if" "(" Expr ")" Statement ("else" Statement)?
+
+  WhileStatement = "while" "(" Expr ")" Statement
+
+  ForStatement = "for" "(" ForInit? ";" Expr? ";" ForUpdate? ")" Statement
+  ForInit = VarDeclNoSemi | Assignment
+  ForUpdate = Assignment | ident "++" | ident "--" | "++" ident | "--" ident
+  VarDeclNoSemi = Type ident ("=" Expr)?
+
+  ReturnStatement = "return" Expr? ";"
+
+  ExprStatement = Expr ";"
+
+  // Expressions (with precedence)
+  Expr = TernaryExpr
+
+  TernaryExpr = LogicalOrExpr "?" Expr ":" Expr  -- ternary
+              | LogicalOrExpr
+
+  LogicalOrExpr = LogicalOrExpr "||" LogicalAndExpr  -- or
+                | LogicalAndExpr
+
+  LogicalAndExpr = LogicalAndExpr "&&" EqualityExpr  -- and
+                 | EqualityExpr
+
+  EqualityExpr = EqualityExpr "==" RelationalExpr  -- eq
+               | EqualityExpr "!=" RelationalExpr  -- neq
+               | RelationalExpr
+
+  RelationalExpr = RelationalExpr "<" AdditiveExpr   -- lt
+                 | RelationalExpr ">" AdditiveExpr   -- gt
+                 | RelationalExpr "<=" AdditiveExpr  -- lte
+                 | RelationalExpr ">=" AdditiveExpr  -- gte
+                 | AdditiveExpr
+
+  AdditiveExpr = AdditiveExpr "+" MultiplicativeExpr  -- add
+               | AdditiveExpr "-" MultiplicativeExpr  -- sub
+               | MultiplicativeExpr
+
+  MultiplicativeExpr = MultiplicativeExpr "*" UnaryExpr  -- mul
+                     | MultiplicativeExpr "/" UnaryExpr  -- div
+                     | MultiplicativeExpr "%" UnaryExpr  -- mod
+                     | UnaryExpr
+
+  UnaryExpr = "!" UnaryExpr  -- not
+            | "-" UnaryExpr  -- neg
+            | "++" ident     -- preInc
+            | "--" ident     -- preDec
+            | ident "++"     -- postInc
+            | ident "--"     -- postDec
+            | PrimaryExpr
+
+  PrimaryExpr = "(" Expr ")"  -- paren
+              | ForkCall      -- fork
+              | number        -- num
+              | stringLiteral -- str
+              | ident         -- var
+
+  // Lexical rules
+  ident = ~keyword identStart identPart*
+  identStart = letter | "_"
+  identPart = letter | digit | "_"
+
+  keyword = ("int" | "char" | "void" | "pid_t" | "if" | "else" | "while" | "for" 
+            | "return" | "fork" | "printf" | "include" | "define") ~identPart
+
+  number = digit+
+
+  stringLiteral = "\"" stringChar* "\""
+  stringChar = ~"\"" ~"\\" any
+             | "\\" escapeChar
+  escapeChar = "n" | "t" | "r" | "\\" | "\"" | "0"
+
+  // Skip whitespace and comments
+  space += comment
+  comment = "//" (~newline any)* &newline
+          | "/*" (~"*/" any)* "*/"
+}

@@ -15,6 +15,9 @@ interface DebugPanelProps {
   output?: string;
   input?: string;
   onInputChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  editorTheme?: string;
+  initialEditorHeight?: number;
+  onEditorHeightChange?: (height: number) => void;
 }
 
 const DebugPanel: React.FC<DebugPanelProps> = ({ 
@@ -28,13 +31,44 @@ const DebugPanel: React.FC<DebugPanelProps> = ({
   onDebuggerCreated,
   output = '',
   input = '',
-  onInputChange
+  onInputChange,
+  editorTheme = 'monokai',
+  initialEditorHeight = 250,
+  onEditorHeightChange
 }) => {
   const [localOutput, setLocalOutput] = useState<string>('');
   const [localInput, setLocalInput] = useState<string>('');
   const [isDebugging, setIsDebugging] = useState(false);
   const [currentLine, setCurrentLine] = useState(-1);
+  const [editorHeight, setEditorHeight] = useState(initialEditorHeight);
   const debuggerRef = useRef<CPPDebugger | null>(null);
+  const isResizingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  // Handle editor vertical resize
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    isResizingRef.current = true;
+    startYRef.current = e.clientY;
+    startHeightRef.current = editorHeight;
+    document.addEventListener('mousemove', handleResizeMouseMove);
+    document.addEventListener('mouseup', handleResizeMouseUp);
+    e.preventDefault();
+  };
+
+  const handleResizeMouseMove = (e: MouseEvent) => {
+    if (!isResizingRef.current) return;
+    const delta = e.clientY - startYRef.current;
+    const newHeight = Math.max(100, Math.min(800, startHeightRef.current + delta));
+    setEditorHeight(newHeight);
+    onEditorHeightChange?.(newHeight);
+  };
+
+  const handleResizeMouseUp = () => {
+    isResizingRef.current = false;
+    document.removeEventListener('mousemove', handleResizeMouseMove);
+    document.removeEventListener('mouseup', handleResizeMouseUp);
+  };
 
   // Use external debugging state if provided
   const debuggingState = externalIsDebugging !== undefined ? externalIsDebugging : isDebugging;
@@ -159,7 +193,7 @@ const DebugPanel: React.FC<DebugPanelProps> = ({
           onClick={handleStepNext}
           disabled={!debuggingState}
         >
-          Next Step
+          Step All
         </button>
         <button 
           className="btn-debug btn-stop" 
@@ -176,14 +210,19 @@ const DebugPanel: React.FC<DebugPanelProps> = ({
           readOnly={debuggingState}
           markers={markers}
           mode="c_cpp"
-          theme="monokai"
+          theme={editorTheme}
           name="debug-editor"
           width="100%"
-          height="250px"
+          height={`${editorHeight}px`}
           fontSize={14}
           showPrintMargin={false}
           highlightActiveLine={true}
           onChange={handleCodeChange}
+        />
+        <div 
+          className="editor-resize-handle"
+          onMouseDown={handleResizeMouseDown}
+          title="Drag to resize editor"
         />
       </div>
       

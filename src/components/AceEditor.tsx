@@ -4,6 +4,7 @@ import AceEditor from 'react-ace';
 
 import "ace-builds/src-noconflict/mode-c_cpp";
 import "ace-builds/src-noconflict/theme-monokai";
+import "ace-builds/src-noconflict/theme-chrome";
 import "ace-builds/src-noconflict/ext-language_tools";
 
 const AceEditorWrapper = React.forwardRef(({
@@ -12,6 +13,7 @@ const AceEditorWrapper = React.forwardRef(({
     theme = "monokai",
     value = "",
     markers = [],
+    highlightLine = -1,
     fontSize = 12,
     width = "100%",
     height = "100%",
@@ -29,12 +31,14 @@ const AceEditorWrapper = React.forwardRef(({
     const markerIds = useRef([]);
 
     useEffect(() => {
+        console.log(`AceEditor ${name}: init useEffect, window.ace=${!!window.ace}`);
         if (!window.ace) {
             console.error("Ace editor not loaded!");
             return;
         }
 
         window.Range = ace.require("ace/range").Range;
+        console.log(`AceEditor ${name}: creating editor for element id=${name}`);
         editorRef.current = ace.edit(name);
         editorRef.current.on("change", handleChange);
         updateEditorProps();
@@ -52,11 +56,12 @@ const AceEditorWrapper = React.forwardRef(({
     }, []);
 
     useEffect(() => {
+        console.log(`AceEditor ${name}: highlightLine changed to ${highlightLine}, editorRef=${!!editorRef.current}`);
         if (editorRef.current) {
             updateEditorProps();
         }
     }, [
-        markers, mode, theme, fontSize, maxLines, readOnly, 
+        markers, highlightLine, mode, theme, fontSize, maxLines, readOnly, 
         highlightActiveLine, setShowPrintMargin, value, showGutter
     ]);
 
@@ -86,8 +91,14 @@ const AceEditorWrapper = React.forwardRef(({
         }
         markerIds.current = [];
 
-        // Add new markers
-        if (markers && markers.length) {
+        // Add new markers - prefer highlightLine if set
+        const Range = ace.require("ace/range").Range;
+        if (highlightLine >= 0 && Range) {
+            const marker = new Range(highlightLine, 0, highlightLine, 1);
+            const markerId = editor.getSession().addMarker(marker, "debug-highlight", "fullLine");
+            markerIds.current.push(markerId);
+            console.log(`AceEditor ${name}: added marker for line ${highlightLine}, markerId=${markerId}`);
+        } else if (markers && markers.length) {
             for (let marker of markers) {
                 markerIds.current.push(editor.getSession().addMarker(marker, "debug-highlight", "fullLine"));
             }

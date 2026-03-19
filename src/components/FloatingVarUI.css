@@ -1,11 +1,15 @@
 .floating-var-ui {
-  font-family: Arial, sans-serif;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
   user-select: none;
 }
 
 .floating-var-ui .drag-handle {
   user-select: none;
   cursor: move;
+}
+
+.floating-var-ui .drag-handle:active {
+  background-color: #353545 !important;
 }
 
 /* Override some of the default react-var-ui styles to fit our floating window */
